@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <title>ASX 200 Market Cap</title>
+  <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/css/bootstrap.min.css">
+  <style>
+    .code {
+      font-weight: bold;
+    }
+    .company {
+      font-style: italic;
+      font-size: 0.9em;
+    }
+  </style>
+</head>
+
+<body class="container">
+  <h1>ASX 200 Market Cap</h1>
+  <p>This visualisation shows the historical market cap of ASX 200 companies. ASX 200 data is from <a href="http://www.asx200list.com">ASX 200 List</a>.</p>
+  <div class="row" id="controls">
+    <div class="col-sm-2">
+      <label>Sort</label>
+      <div class="radio">
+        <label><input type="radio" name="sort" id="sort-asc">Lowest</label>
+      </div>
+      <div class="radio">
+        <label><input type="radio" name="sort" id="sort-desc" checked>Highest</label>
+      </div>
+    </div>
+    <div class="col-sm-2">
+      <div class="form-group">
+        <label for="date">Limit</label>
+        <input type="number" class="form-control" id="limit" min="0" max="200" value="15">
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-sm-12" id="vis">
+    </div>
+  </div>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/4.9.1/d3.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.18.1/moment.min.js"></script>
+  <script>
+    var sliderHeight = 100;
+    var sliderLabelHeight = 15;
+    var sliderMargin = 30;
+    var brushWidth = 15;
+    var stockHeight = 40;
+    var stockMargin = 5;
+    var svg = d3.select('#vis')
+      .append('svg')
+      .attr('width',  '100%');
+
+    // Dates in data are in ISO 8601 format
+    var parseTime = d3.timeParse('%Y-%m-%d');
+    var sliderX = d3.scaleTime();
+    var sliderY = d3.scaleLinear()
+      .rangeRound([sliderHeight, sliderLabelHeight]);
+    var area = d3.area()
+      .x(function(d) { return sliderX(d.key); })
+      .y0(sliderY(0))
+      .y1(function(d) { return sliderY(d.value); });
+    var brush = d3.brushX()
+      .on('brush end', brushed);
+
+    // Group for stocks
+    var g = svg.append('g')
+      .attr('class', 'stocks')
+      // Position beneath date slider
+      .attr('transform', 'translate(0,' + (sliderHeight + sliderMargin) + ')');
+    var color = d3.scaleOrdinal(d3.schemeCategory20);
+
+    // Updates stock visualisation based on the supplied data
+    function updateStocks(data) {
+      // Transition used for animating stocks
+      var t = d3.transition()
+        .duration(750);
+      // Set height of SVG dynamically based on number of data points
+      svg.attr('height', sliderHeight + sliderMargin + data.length * (stockHeight + stockMargin));
+      var svgWidth = svg.node().width.baseVal.value;
+      var max = d3.max(data, function(d) { return d['Market Cap']; });
+
+      var stocks = g.selectAll('g')
+        .data(data, function(d) { return d.Code; });
+
+      stocks.exit()
+        .transition(t)
+        .style('fill-opacity', 1e-6)
+        .remove();
+
+      var enter = stocks.enter()
+        .append('g')
+        .attr('transform', function(d, i) { return 'translate(0,' + i * (stockHeight + stockMargin) + ')'; })
+        .style('fill-opacity', 1);
+      enter.append('rect')
+        .attr('height', stockHeight)
+        .attr('fill', function(d) { return color(companies[d.Code].Sector); });
+      enter.append('text')
+        .attr('class', 'code')
+        .attr('y', 17);
+      enter.append('text')
+        .attr('class', 'company')
+        .text(function(d) { return companies[d.Code].Company; })
+        .attr('y', 32);
+
+      var update = stocks.merge(enter);
+      update.transition(t)
+        .attr('transform', function(d, i) { return 'translate(0,' + i * (stockHeight + stockMargin) + ')'; })
+        .style('fill-opacity', 1)
+        .attr('fill', function(d) { return color(companies[d.Code].Sector); });
+      update.select('rect')
+        .transition(t)
+        .attr('width', function(d) { return d['Market Cap'] / max * svgWidth; });
+      update.select('text.code')
+        .text(function(d) { return d.Code + ' ' + prettyValue(d['Market Cap']); })
+      // Determine where to position text labels
+      update.each(function(d) {
+        var barWidth = d['Market Cap'] / max * svgWidth;
+        var g = d3.select(this);
+        var codeWidth = g.select('text.company').node().getBBox().width + 20;
+        var companyWidth = g.select('text.company').node().getBBox().width + 20;
+        if (barWidth < codeWidth || barWidth < companyWidth) {
+          d.labelXPos = barWidth + 10;
+          d.labelColor = '#000';
+        } else {
+          d.labelXPos = 10;
+          d.labelColor = '#fff'
+        }
+      })
+        .selectAll('text')
+        .transition(t)
+        .attr('x', function(d) { return d.labelXPos; })
+        .attr('fill', function(d) { return d.labelColor; });
+    }
+
+    // Turn number into dollar amount
+    function prettyValue(value) {
+      if (value > 1000000000) {
+        return '$' + (value / 1000000000).toFixed(2) + 'B';
+      } else if (value > 1000000) {
+        return '$' + (value / 1000000).toFixed(2) + 'M';
+      } else if (value > 1000) {
+        return '$' + (value / 1000).toFixed(2) + 'K';
+      }
+    }
+
+    // Filter, sort and limit data based on param controls
+    function filter(data) {
+      var filteredData = data.filter(function(d) {
+         return parseTime(d.Date).getTime() === filterDate.getTime();
+       });
+      var sortAsc = d3.select('#sort-asc:checked').node();
+      var sortedData = filteredData.sort(function(a, b) {
+          return sortAsc ? a['Market Cap'] - b['Market Cap'] : b['Market Cap'] - a['Market Cap'];
+      });
+      var limit = +d3.select('#limit').node().value;
+      var limitedData = sortedData.slice(0, limit);
+      return limitedData;
+    }
+
+    // Creates the date filter
+    function updateDateFilter() {
+        var svgWidth = svg.node().width.baseVal.value;
+        sliderX.rangeRound([brushWidth / 2, svgWidth - brushWidth / 2]);
+        // Brush extent is slightly larger than the slider width to be able to select first and last values
+        brush.extent([[0, sliderLabelHeight], [svgWidth, sliderHeight]]);
+        svg.select('g.slider')
+          .remove();
+        var slider = svg.append('g')
+          .attr('class', 'slider');
+        slider.append('path')
+          .datum(totalMarketCap)
+          .attr('fill', '#eee')
+          .attr('d', area);
+        slider.append('g')
+          .attr('transform', 'translate(0,' + sliderHeight + ')')
+          .call(d3.axisBottom(sliderX));
+        var end;
+        if (selectedDate) {
+          end = sliderX(selectedDate);
+        } else {
+          end = sliderX(totalMarketCap[totalMarketCap.length - 1].key) + brushWidth / 2;
+        }
+        brushEl = slider.append('g')
+          .attr('class', 'brush')
+          .call(brush);
+        brushEl.append('text')
+          .attr('class', 'small')
+          .attr('fill', 'black')
+          .attr('y', 10)
+          .style('text-anchor', 'middle');
+        brushEl.call(brush.move, [end - 1, end]); // Even though width is 1, it will be resized later
+    }
+
+    var selectedDate;
+    var filterDate;
+    function brushed() {
+      var s = d3.event.selection;
+      // Fix the width of the brush
+      var end = s && s[1] || sliderX.range()[1];
+      if (!s || (s[1] - s[0] != brushWidth)) {
+        brushEl.call(brush.move, [end - brushWidth, end]);
+      }
+      selectedDate = sliderX.invert(end);
+      filterDate = findClosestDate(selectedDate);
+
+      // Position date label in middle of brush and not clip when moved to the edges
+      brushEl.select('text')
+        .text(moment(filterDate).format('D MMM YYYY'));
+      var labelWidth = brushEl.select('text').node().getBBox().width;
+      var labelPos = +brushEl.select('.selection').attr('x') + brushWidth / 2;
+      if (labelPos - labelWidth / 2 < 0) {
+        labelPos = labelWidth / 2;
+      } else if (labelPos + labelWidth / 2 > brush.extent()()[1][0]) {
+        labelPos = brush.extent()()[1][0] - labelWidth / 2;
+      }
+      brushEl.select('text')
+        .attr('x', labelPos);
+
+      render();
+    }
+
+    // Finds the closest market cap date to the supplied date
+    function findClosestDate(date) {
+      var closest;
+      totalMarketCap.forEach(function(d) {
+        if (!closest || Math.abs(date - closest) > Math.abs(date - d.key)) {
+          closest = d.key;
+        }
+      });
+      return closest;
+    }
+
+    var data;
+    var companies = {};
+    var totalMarketCap;
+    var brushEl;
+    d3.csv('data.csv', function(d) {
+      d['Market Cap'] = +d['Market Cap'];
+      return d;
+    }, function(error1, dataCsv) {
+      d3.csv('companies.csv', function(error2, companiesCsv) {
+        data = dataCsv;
+        companiesCsv.forEach(function(d) {
+          companies[d.Code] = d;
+        });
+
+        // Sum the total market cap per date
+        totalMarketCap = d3.nest()
+          .key(function(d) { return d.Date; })
+          .sortKeys(d3.ascending)
+          .rollup(function(l) { return d3.sum(l, function(i) { return i['Market Cap']; }) })
+          .entries(data)
+          .map(function(d) {
+            d.key = parseTime(d.key);
+            return d;
+          });
+        sliderX.domain(d3.extent(totalMarketCap, function(d) { return d.key; }));
+        sliderY.domain([10, d3.max(totalMarketCap, function(d) { return d.value; })]);
+
+        var categories = d3.map(companies, function(d) { return d.Sector }).keys();
+        color.domain(categories);
+
+        updateDateFilter();
+        render();
+      });
+    });
+
+    function render() {
+      var filteredData = filter(data);
+      updateStocks(filteredData);
+    }
+
+    function resize() {
+      updateDateFilter();
+      render();
+    }
+
+    document.getElementById('sort-asc').addEventListener('click', render);
+    document.getElementById('sort-desc').addEventListener('click', render);
+    document.getElementById('limit').addEventListener('input', render);
+    window.addEventListener('resize', resize);
+  </script>
+</body>
+
+</html>
